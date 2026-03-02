@@ -27,6 +27,8 @@ public class HUDManager : MonoBehaviour
     private GameObject gameOverPanel;
     private GameObject quitConfirmPanel;
     private GameObject wordListPanel;
+    private RoleplayUI roleplayUI;
+    private GameObject learnedWordsPanel;
     private Text finalScoreText;
     private Text pointsBalanceText;
     private Text typedInputText;
@@ -44,7 +46,9 @@ public class HUDManager : MonoBehaviour
 
     // ── Learned‐characters pagination ────────────────────────────────
     private int learnedPage = 0;
+    private int learnedWordsPage = 0;
     private const int GridSize = 25; // 5×5
+    private const int WordsPerPage = 15;
 
     void Start()
     {
@@ -148,7 +152,7 @@ public class HUDManager : MonoBehaviour
         typedInputText.GetComponent<RectTransform>().sizeDelta = new Vector2(380, 50);
 
         // ── Find TypingManager and subscribe ───────────────────────
-        typingManager = FindObjectOfType<TypingManager>();
+        typingManager = FindAnyObjectByType<TypingManager>();
         if (typingManager != null)
             typingManager.OnTypedTextChanged += RefreshTypedInput;
 
@@ -168,6 +172,7 @@ public class HUDManager : MonoBehaviour
             GameManager.Instance.OnGameStart    += OnGameStart;
             GameManager.Instance.OnBossStart    += OnBossStartFromMenu;
             GameManager.Instance.OnWaveProgress += RefreshWaveProgress;
+            GameManager.Instance.OnRoleplayDrillStart += OnRoleplayDrillStart;
         }
     }
 
@@ -185,6 +190,7 @@ public class HUDManager : MonoBehaviour
             GameManager.Instance.OnGameStart    -= OnGameStart;
             GameManager.Instance.OnBossStart    -= OnBossStartFromMenu;
             GameManager.Instance.OnWaveProgress -= RefreshWaveProgress;
+            GameManager.Instance.OnRoleplayDrillStart -= OnRoleplayDrillStart;
         }
         if (typingManager != null)
             typingManager.OnTypedTextChanged -= RefreshTypedInput;
@@ -247,6 +253,17 @@ public class HUDManager : MonoBehaviour
             Camera.main.backgroundColor = new Color(0.12f, 0f, 0f);
     }
 
+    private void OnRoleplayDrillStart(RoleplayScenario scenario)
+    {
+        HideAllMenus();
+        if (roleplayUI != null)
+            roleplayUI.Close();
+        hudBar.SetActive(true);
+        ClearHintBox();
+        if (Camera.main != null)
+            Camera.main.backgroundColor = new Color(0f, 0.05f, 0.1f); // dark blue tint for roleplay
+    }
+
     // ══════════════════════════════════════════════════════════════════
     //  MAIN MENU
     // ══════════════════════════════════════════════════════════════════
@@ -285,6 +302,25 @@ public class HUDManager : MonoBehaviour
         CreateMenuButton(mainMenuPanel.transform, "LEARNED CHARACTERS", new Vector2(0, -100), () =>
         {
             ShowLearnedCharacters();
+        });
+
+        // Roleplay Scenarios button
+        CreateMenuButton(mainMenuPanel.transform, "ROLEPLAY SCENARIOS", new Vector2(0, -190), () =>
+        {
+            HideAllMenus();
+            if (roleplayUI == null)
+            {
+                GameObject rpObj = new GameObject("RoleplayUI");
+                rpObj.transform.SetParent(transform, false);
+                roleplayUI = rpObj.AddComponent<RoleplayUI>();
+            }
+            roleplayUI.ShowScenarioList();
+        });
+
+        // Learned Words button
+        CreateMenuButton(mainMenuPanel.transform, "LEARNED WORDS", new Vector2(0, -280), () =>
+        {
+            ShowLearnedWords();
         });
 
     }
@@ -533,6 +569,145 @@ public class HUDManager : MonoBehaviour
     }
 
     // ══════════════════════════════════════════════════════════════════
+    //  LEARNED WORDS (from roleplay scenarios)
+    // ══════════════════════════════════════════════════════════════════
+
+    private void ShowLearnedWords()
+    {
+        HideAllMenus();
+        learnedWordsPage = 0;
+        BuildLearnedWordsPage();
+    }
+
+    private void BuildLearnedWordsPage()
+    {
+        if (learnedWordsPanel != null)
+            Destroy(learnedWordsPanel);
+
+        learnedWordsPanel = CreateFullscreenPanel("LearnedWordsPanel",
+            new Color(0.06f, 0.06f, 0.1f, 0.97f));
+
+        var words = LearnedWordsManager.Instance != null
+            ? LearnedWordsManager.Instance.Words
+            : new List<LearnedWordsManager.LearnedWord>();
+
+        int totalPages = Mathf.Max(1, Mathf.CeilToInt((float)words.Count / WordsPerPage));
+        learnedWordsPage = Mathf.Clamp(learnedWordsPage, 0, totalPages - 1);
+
+        // CJK font
+        Font cjkFont = Font.CreateDynamicFontFromOSFont("Microsoft YaHei", 48);
+        if (cjkFont == null)
+            cjkFont = Font.CreateDynamicFontFromOSFont("SimHei", 48);
+        if (cjkFont == null)
+            cjkFont = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
+
+        // Title
+        Text title = CreatePanelText(learnedWordsPanel.transform,
+            "LEARNED WORDS", 42, new Vector2(0, 340));
+        title.fontStyle = FontStyle.Bold;
+
+        // Stats
+        string stats = $"{words.Count} words learned from roleplay scenarios";
+        Text statsText = CreatePanelText(learnedWordsPanel.transform,
+            stats, 20, new Vector2(0, 295));
+        statsText.color = new Color(0.6f, 0.8f, 0.6f);
+
+        // Page info
+        CreatePanelText(learnedWordsPanel.transform,
+            $"Page {learnedWordsPage + 1} / {totalPages}", 20, new Vector2(0, 265));
+
+        if (words.Count == 0)
+        {
+            Text empty = CreatePanelText(learnedWordsPanel.transform,
+                "No words learned yet.\nComplete a roleplay scenario word drill to add words!",
+                24, new Vector2(0, 50));
+            empty.color = new Color(0.5f, 0.5f, 0.5f);
+            RectTransform emptyRect = empty.GetComponent<RectTransform>();
+            emptyRect.sizeDelta = new Vector2(600, 80);
+            empty.horizontalOverflow = HorizontalWrapMode.Wrap;
+        }
+        else
+        {
+            int startIdx = learnedWordsPage * WordsPerPage;
+            int endIdx = Mathf.Min(startIdx + WordsPerPage, words.Count);
+            float startY = 220f;
+            float lineHeight = 38f;
+
+            for (int i = startIdx; i < endIdx; i++)
+            {
+                int row = i - startIdx;
+                float y = startY - row * lineHeight;
+                var w = words[i];
+
+                // Character (large, left)
+                Text charText = CreatePanelText(learnedWordsPanel.transform,
+                    w.character, 28, new Vector2(-280, y));
+                if (cjkFont != null) charText.font = cjkFont;
+                charText.alignment = TextAnchor.MiddleLeft;
+                RectTransform ctRect = charText.GetComponent<RectTransform>();
+                ctRect.sizeDelta = new Vector2(80, lineHeight);
+
+                // Pinyin
+                Text pinyinText = CreatePanelText(learnedWordsPanel.transform,
+                    w.pinyinDisplay, 20, new Vector2(-170, y));
+                pinyinText.alignment = TextAnchor.MiddleLeft;
+                pinyinText.color = new Color(0.7f, 0.9f, 0.7f);
+                RectTransform ptRect = pinyinText.GetComponent<RectTransform>();
+                ptRect.sizeDelta = new Vector2(120, lineHeight);
+
+                // Definition
+                string def = w.definition;
+                if (def.Length > 25) def = def.Substring(0, 22) + "...";
+                Text defText = CreatePanelText(learnedWordsPanel.transform,
+                    def, 18, new Vector2(-20, y));
+                defText.alignment = TextAnchor.MiddleLeft;
+                defText.color = new Color(0.8f, 0.8f, 0.8f);
+                RectTransform dtRect = defText.GetComponent<RectTransform>();
+                dtRect.sizeDelta = new Vector2(220, lineHeight);
+
+                // Scenario source
+                string src = w.scenarioTitle ?? "";
+                if (src.Length > 18) src = src.Substring(0, 15) + "...";
+                Text srcText = CreatePanelText(learnedWordsPanel.transform,
+                    src, 14, new Vector2(220, y));
+                srcText.alignment = TextAnchor.MiddleLeft;
+                srcText.color = new Color(0.5f, 0.5f, 0.6f);
+                srcText.fontStyle = FontStyle.Italic;
+                RectTransform srRect = srcText.GetComponent<RectTransform>();
+                srRect.sizeDelta = new Vector2(180, lineHeight);
+            }
+        }
+
+        // Pagination
+        float navY = -350f;
+        if (learnedWordsPage > 0)
+        {
+            CreateMenuButton(learnedWordsPanel.transform, "< PREV",
+                new Vector2(-160, navY), () =>
+                {
+                    learnedWordsPage--;
+                    BuildLearnedWordsPage();
+                }, 180, 50);
+        }
+        if (learnedWordsPage < totalPages - 1)
+        {
+            CreateMenuButton(learnedWordsPanel.transform, "NEXT >",
+                new Vector2(160, navY), () =>
+                {
+                    learnedWordsPage++;
+                    BuildLearnedWordsPage();
+                }, 180, 50);
+        }
+
+        // Back button
+        CreateMenuButton(learnedWordsPanel.transform, "BACK",
+            new Vector2(0, navY - 70), () =>
+            {
+                ShowMainMenu();
+            });
+    }
+
+    // ══════════════════════════════════════════════════════════════════
     //  WAVE INTRO
     // ══════════════════════════════════════════════════════════════════
 
@@ -586,8 +761,12 @@ public class HUDManager : MonoBehaviour
         else
         {
             // ── Normal wave intro ────────────────────────────────────
+            bool isRoleplay = GameManager.Instance != null && GameManager.Instance.IsRoleplayDrill;
+            string introTitle = isRoleplay
+                ? "WAVE " + wave + " — NEW WORDS"
+                : "WAVE " + wave + " — NEW CHARACTERS";
             CreatePanelText(waveIntroPanel.transform,
-                "WAVE " + wave + " — NEW CHARACTERS", 42, new Vector2(0, 200));
+                introTitle, 42, new Vector2(0, 200));
 
             float startY = 80f;
             float offsetX = entries.Count > 1 ? -220f : 0f;
@@ -956,6 +1135,7 @@ public class HUDManager : MonoBehaviour
         if (mainMenuPanel != null) { Destroy(mainMenuPanel); mainMenuPanel = null; }
         if (waveSelectPanel != null) { Destroy(waveSelectPanel); waveSelectPanel = null; }
         if (learnedCharsPanel != null) { Destroy(learnedCharsPanel); learnedCharsPanel = null; }
+        if (learnedWordsPanel != null) { Destroy(learnedWordsPanel); learnedWordsPanel = null; }
         HideQuitConfirm();
     }
 

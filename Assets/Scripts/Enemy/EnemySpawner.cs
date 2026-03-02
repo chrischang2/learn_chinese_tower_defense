@@ -28,12 +28,28 @@ public class EnemySpawner : MonoBehaviour
     private int waveEnemiesTotal = 0;
     private int waveEnemiesKilled = 0;
 
+    // ── LLM Integration ──────────────────────────────────────────────
+
+    [Header("LLM Word Generation")]
+    [Tooltip("When true, every 3rd wave uses LLM-generated themed words instead of frequency list")]
+    public bool useLLMWords = true;
+
+    [Tooltip("How many LLM-generated words to request per themed wave")]
+    public int llmWordCount = 8;
+
+    /// <summary>Pre-fetched LLM entries ready for the next themed wave.</summary>
+    private List<WordList.HanziEntry> pendingLLMEntries = new List<WordList.HanziEntry>();
+
+    /// <summary>True while waiting for LLM generation to complete.</summary>
+    private bool llmGenerating = false;
+
     void Start()
     {
         if (GameManager.Instance != null)
         {
             GameManager.Instance.OnGameStart += OnGameStart;
             GameManager.Instance.OnBossStart += OnBossStartFromMenu;
+            GameManager.Instance.OnRoleplayDrillStart += OnRoleplayDrillStart;
         }
     }
 
@@ -43,6 +59,7 @@ public class EnemySpawner : MonoBehaviour
         {
             GameManager.Instance.OnGameStart -= OnGameStart;
             GameManager.Instance.OnBossStart -= OnBossStartFromMenu;
+            GameManager.Instance.OnRoleplayDrillStart -= OnRoleplayDrillStart;
         }
     }
 
@@ -61,6 +78,9 @@ public class EnemySpawner : MonoBehaviour
     private IEnumerator NormalStartRoutine()
     {
         yield return new WaitForSeconds(1.0f);
+        // Kick off LLM pre-fetch so themed words are ready by wave 3
+        if (useLLMWords)
+            StartLLMPreFetch();
         yield return WaveLoop();
     }
 
@@ -86,6 +106,107 @@ public class EnemySpawner : MonoBehaviour
         yield return WaveLoop();
     }
 
+    // ── Roleplay drill ──────────────────────────────────────────────
+
+    /// <summary>Start a roleplay word drill with the scenario's word list.</summary>
+    private void OnRoleplayDrillStart(RoleplayScenario scenario)
+    {
+        if (gameStarted) return;
+        gameStarted = true;
+        currentWave = 1;
+        introducedCount = 0;
+        StartCoroutine(RoleplayDrillRoutine(scenario));
+    }
+
+    /// <summary>
+    /// Roleplay drill: introduces 2 words at a time across multiple waves,
+    /// matching the normal game's learning flow.
+    /// Each new wave shows 2 new words on the wave intro screen.
+    /// New words appear 3 times, previously seen words get review spawns.
+    /// On completion, marks words as learned and returns to menu.
+    /// </summary>
+    private IEnumerator RoleplayDrillRoutine(RoleplayScenario scenario)
+    {
+        yield return new WaitForSeconds(1.0f);
+
+        List<WordList.HanziEntry> wordEntries = scenario.ToHanziEntries();
+
+        if (wordEntries.Count == 0)
+        {
+            Debug.LogWarning("[EnemySpawner] Roleplay scenario has no valid words.");
+            if (GameManager.Instance != null)
+                GameManager.Instance.RoleplayDrillComplete();
+            yield break;
+        }
+
+        // Introduce words 2 at a time across multiple waves
+        int totalWords = wordEntries.Count;
+        int wordsIntroduced = 0;
+        int drillWave = 0;
+
+        while (wordsIntroduced < totalWords)
+        {
+            if (IsGameOver()) yield break;
+
+            drillWave++;
+            if (GameManager.Instance != null)
+                GameManager.Instance.SetWave(drillWave);
+
+            // Pick the next 2 new words
+            int newStart = wordsIntroduced;
+            int newCount = Mathf.Min(2, totalWords - wordsIntroduced);
+            List<WordList.HanziEntry> newWords = wordEntries.GetRange(newStart, newCount);
+
+            // Show wave intro screen with the 2 new words
+            if (GameManager.Instance != null)
+                GameManager.Instance.BeginWaveIntro(newWords);
+
+            yield return new WaitUntil(() =>
+                GameManager.Instance == null ||
+                GameManager.Instance.GameState != GameManager.State.WaveIntro);
+
+            if (IsGameOver()) yield break;
+
+            wordsIntroduced += newCount;
+
+            // Build spawn queue
+            List<WordList.HanziEntry> spawnQueue = new List<WordList.HanziEntry>();
+
+            // New words appear 3 times each
+            foreach (var entry in newWords)
+            {
+                for (int j = 0; j < 3; j++)
+                    spawnQueue.Add(entry);
+            }
+
+            // Review previously introduced words (1-2 appearances each)
+            for (int i = 0; i < newStart; i++)
+            {
+                int wavesAgo = drillWave - ((i / 2) + 1);
+                int reps = 0;
+                if (wavesAgo == 1) reps = 2;
+                else if (wavesAgo >= 2 && wavesAgo <= 4) reps = 1;
+
+                for (int j = 0; j < reps; j++)
+                    spawnQueue.Add(wordEntries[i]);
+            }
+
+            ShuffleQueue(spawnQueue);
+
+            float interval = Mathf.Max(0.8f, 2.0f - wordsIntroduced * 0.05f);
+            yield return SpawnAndWaitForWave(spawnQueue, interval, false);
+
+            if (IsGameOver()) yield break;
+
+            yield return new WaitForSeconds(1.0f);
+        }
+
+        // Drill complete!
+        Debug.Log("[EnemySpawner] Roleplay drill complete.");
+        if (GameManager.Instance != null)
+            GameManager.Instance.RoleplayDrillComplete();
+    }
+
     // ── Wave loop ────────────────────────────────────────────────────
 
     private bool IsGameOver()
@@ -104,102 +225,144 @@ public class EnemySpawner : MonoBehaviour
             if (GameManager.Instance != null)
                 GameManager.Instance.SetWave(currentWave);
 
-            // ── Determine the 2 new characters for this wave ─────────
-            int newStartIndex = introducedCount;
-            int newCount = Mathf.Min(2, WordList.Count - introducedCount);
-            List<WordList.HanziEntry> newEntries = new List<WordList.HanziEntry>();
-            for (int i = 0; i < newCount; i++)
+            // ── Check if this is an LLM-themed wave ──────────────────
+            bool isLLMWave = useLLMWords &&
+                             currentWave % 3 == 0 &&
+                             currentWave > 1 &&
+                             pendingLLMEntries.Count > 0;
+
+            if (isLLMWave)
             {
-                newEntries.Add(WordList.GetEntryByIndex(newStartIndex + i));
+                // Use the pre-fetched LLM entries for this wave
+                List<WordList.HanziEntry> llmEntries =
+                    new List<WordList.HanziEntry>(pendingLLMEntries);
+                pendingLLMEntries.Clear();
+
+                // Show wave intro with the LLM entries (show first 2)
+                List<WordList.HanziEntry> introPreview = llmEntries.GetRange(
+                    0, Mathf.Min(2, llmEntries.Count));
+                if (GameManager.Instance != null)
+                    GameManager.Instance.BeginWaveIntro(introPreview);
+
+                yield return new WaitUntil(() =>
+                    GameManager.Instance == null ||
+                    GameManager.Instance.GameState != GameManager.State.WaveIntro);
+                if (IsGameOver()) yield break;
+
+                // Build spawn queue: each LLM entry appears 2-3 times
+                List<WordList.HanziEntry> spawnQueue = new List<WordList.HanziEntry>();
+                foreach (var entry in llmEntries)
+                {
+                    int reps = Random.Range(2, 4);
+                    for (int j = 0; j < reps; j++)
+                        spawnQueue.Add(entry);
+                }
+                ShuffleQueue(spawnQueue);
+
+                yield return SpawnAndWaitForWave(spawnQueue, GetSpawnInterval(), false);
+                if (IsGameOver()) yield break;
+
+                // Pre-fetch next LLM batch in background
+                StartLLMPreFetch();
             }
-
-            // ── Show wave intro screen ───────────────────────────────
-            if (GameManager.Instance != null)
-                GameManager.Instance.BeginWaveIntro(newEntries);
-
-            // Wait for intro to finish
-            yield return new WaitUntil(() =>
-                GameManager.Instance == null ||
-                GameManager.Instance.GameState != GameManager.State.WaveIntro);
-
-            if (IsGameOver()) yield break;
-
-            // Update introduced count
-            introducedCount += newCount;
-
-            // ── Build the spawn queue ────────────────────────────────
-            List<WordList.HanziEntry> spawnQueue = new List<WordList.HanziEntry>();
-
-            // Add new characters 3 times each
-            for (int i = 0; i < newCount; i++)
+            else
             {
-                for (int j = 0; j < 3; j++)
-                    spawnQueue.Add(newEntries[i]);
-            }
+                // ── Original frequency-based wave logic ──────────────
 
-            // Guaranteed appearances for recent characters:
-            // 1 wave ago: 2× each, 2-5 waves ago: 1× each
-            for (int i = 0; i < newStartIndex; i++)
-            {
-                int introWave = (i / 2) + 1;
-                int wavesAgo = currentWave - introWave;
-                int guaranteed = 0;
-                if (wavesAgo == 1) guaranteed = 2;
-                else if (wavesAgo >= 2 && wavesAgo <= 5) guaranteed = 1;
+                // Determine the 2 new characters for this wave
+                int newStartIndex = introducedCount;
+                int newCount = Mathf.Min(2, WordList.Count - introducedCount);
+                List<WordList.HanziEntry> newEntries = new List<WordList.HanziEntry>();
+                for (int i = 0; i < newCount; i++)
+                {
+                    newEntries.Add(WordList.GetEntryByIndex(newStartIndex + i));
+                }
 
-                for (int j = 0; j < guaranteed; j++)
-                    spawnQueue.Add(WordList.GetEntryByIndex(i));
-            }
+                // Show wave intro screen
+                if (GameManager.Instance != null)
+                    GameManager.Instance.BeginWaveIntro(newEntries);
 
-            // Cap enemies at 30 after wave 10
-            int totalEnemies = currentWave > 10 ? 30 : 4 + currentWave * 2;
-            int extraSlots = Mathf.Max(0, totalEnemies - spawnQueue.Count);
+                yield return new WaitUntil(() =>
+                    GameManager.Instance == null ||
+                    GameManager.Instance.GameState != GameManager.State.WaveIntro);
+                if (IsGameOver()) yield break;
 
-            // Fill remaining slots randomly from all learned characters
-            if (newStartIndex > 0 && extraSlots > 0)
-            {
-                Dictionary<string, int> extraCounts = new Dictionary<string, int>();
-                // Pre-count guaranteed appearances
+                introducedCount += newCount;
+
+                // Build the spawn queue
+                List<WordList.HanziEntry> spawnQueue = new List<WordList.HanziEntry>();
+
+                // New characters 3 times each
+                for (int i = 0; i < newCount; i++)
+                {
+                    for (int j = 0; j < 3; j++)
+                        spawnQueue.Add(newEntries[i]);
+                }
+
+                // Guaranteed appearances for recent characters
                 for (int i = 0; i < newStartIndex; i++)
                 {
-                    WordList.HanziEntry e = WordList.GetEntryByIndex(i);
                     int introWave = (i / 2) + 1;
                     int wavesAgo = currentWave - introWave;
                     int guaranteed = 0;
                     if (wavesAgo == 1) guaranteed = 2;
                     else if (wavesAgo >= 2 && wavesAgo <= 5) guaranteed = 1;
-                    if (guaranteed > 0)
-                        extraCounts[e.Character] = guaranteed;
+
+                    for (int j = 0; j < guaranteed; j++)
+                        spawnQueue.Add(WordList.GetEntryByIndex(i));
                 }
 
-                int filled = 0;
-                int safetyLimit = extraSlots * 10;
-                int tries = 0;
+                // Cap enemies at 30 after wave 10
+                int totalEnemies = currentWave > 10 ? 30 : 4 + currentWave * 2;
+                int extraSlots = Mathf.Max(0, totalEnemies - spawnQueue.Count);
 
-                while (filled < extraSlots && tries < safetyLimit)
+                // Fill remaining slots randomly from all learned characters
+                if (newStartIndex > 0 && extraSlots > 0)
                 {
-                    tries++;
-                    WordList.HanziEntry pick = WordList.GetEntryByIndex(Random.Range(0, newStartIndex));
-                    int count;
-                    extraCounts.TryGetValue(pick.Character, out count);
-
-                    if (count < 2)
+                    Dictionary<string, int> extraCounts = new Dictionary<string, int>();
+                    for (int i = 0; i < newStartIndex; i++)
                     {
-                        extraCounts[pick.Character] = count + 1;
-                        spawnQueue.Add(pick);
-                        filled++;
+                        WordList.HanziEntry e = WordList.GetEntryByIndex(i);
+                        int introWave = (i / 2) + 1;
+                        int wavesAgo = currentWave - introWave;
+                        int guaranteed = 0;
+                        if (wavesAgo == 1) guaranteed = 2;
+                        else if (wavesAgo >= 2 && wavesAgo <= 5) guaranteed = 1;
+                        if (guaranteed > 0)
+                            extraCounts[e.Character] = guaranteed;
+                    }
+
+                    int filled = 0;
+                    int safetyLimit = extraSlots * 10;
+                    int tries = 0;
+
+                    while (filled < extraSlots && tries < safetyLimit)
+                    {
+                        tries++;
+                        WordList.HanziEntry pick = WordList.GetEntryByIndex(Random.Range(0, newStartIndex));
+                        int count;
+                        extraCounts.TryGetValue(pick.Character, out count);
+
+                        if (count < 2)
+                        {
+                            extraCounts[pick.Character] = count + 1;
+                            spawnQueue.Add(pick);
+                            filled++;
+                        }
                     }
                 }
+
+                ShuffleQueue(spawnQueue);
+
+                yield return SpawnAndWaitForWave(spawnQueue, GetSpawnInterval(), false);
+                if (IsGameOver()) yield break;
+
+                // Pre-fetch LLM entries if next themed wave is coming
+                if (useLLMWords && (currentWave + 1) % 3 == 0 && pendingLLMEntries.Count == 0)
+                    StartLLMPreFetch();
             }
 
-            // Shuffle the spawn queue
-            ShuffleQueue(spawnQueue);
-
-            // ── Spawn enemies one by one ─────────────────────────────
-            yield return SpawnAndWaitForWave(spawnQueue, GetSpawnInterval(), false);
-            if (IsGameOver()) yield break;
-
-            // ── Boss wave after every 5th wave ───────────────────────
+            // Boss wave after every 5th wave
             if (currentWave % 5 == 0)
             {
                 yield return new WaitForSeconds(1.5f);
@@ -210,6 +373,26 @@ public class EnemySpawner : MonoBehaviour
             // Brief pause between waves
             yield return new WaitForSeconds(1.5f);
         }
+    }
+
+    // ── LLM pre-fetch ────────────────────────────────────────────────
+
+    private void StartLLMPreFetch()
+    {
+        if (llmGenerating) return;
+        if (LLMWordGenerator.Instance == null) return;
+        if (!LLMWordGenerator.Instance.IsServerReady()) return;
+
+        llmGenerating = true;
+        LLMWordGenerator.Instance.GenerateNextTheme(llmWordCount, entries =>
+        {
+            pendingLLMEntries = entries ?? new List<WordList.HanziEntry>();
+            llmGenerating = false;
+            if (pendingLLMEntries.Count > 0)
+                Debug.Log($"[EnemySpawner] Pre-fetched {pendingLLMEntries.Count} LLM words for next themed wave.");
+            else
+                Debug.LogWarning("[EnemySpawner] LLM returned empty word list; next themed wave will use frequency list.");
+        });
     }
 
     // ── Boss wave ────────────────────────────────────────────────────

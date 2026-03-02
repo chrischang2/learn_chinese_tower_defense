@@ -134,8 +134,15 @@ public static class WordList
 
     // ── Helpers ──────────────────────────────────────────────────────
 
-    /// <summary>
-    /// Strip Unicode diacritics / tone marks to produce plain ASCII pinyin.
+    /// <summary>    /// Public wrapper for StripTones — used by LLMWordGenerator to convert
+    /// toned pinyin into typeable ASCII pinyin.
+    /// </summary>
+    public static string StripTonesPublic(string pinyin)
+    {
+        return StripTones(pinyin);
+    }
+
+    /// <summary>    /// Strip Unicode diacritics / tone marks to produce plain ASCII pinyin.
     /// e.g. "zhōng" → "zhong", "nǐ" → "ni", "lǜ" → "lv"
     /// </summary>
     private static string StripTones(string pinyin)

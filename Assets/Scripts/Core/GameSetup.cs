@@ -72,6 +72,19 @@ public class GameSetup : MonoBehaviour
         canvasObj.AddComponent<GraphicRaycaster>();
         canvasObj.AddComponent<HUDManager>();
 
+        // ── LLM & Roleplay managers ──────────────────────────────────
+        GameObject llamaObj = new GameObject("LlamaServerManager");
+        llamaObj.AddComponent<LlamaServerManager>();
+
+        GameObject llmGenObj = new GameObject("LLMWordGenerator");
+        llmGenObj.AddComponent<LLMWordGenerator>();
+
+        GameObject roleplayObj = new GameObject("RoleplayManager");
+        roleplayObj.AddComponent<RoleplayManager>();
+
+        GameObject learnedWordsObj = new GameObject("LearnedWordsManager");
+        learnedWordsObj.AddComponent<LearnedWordsManager>();
+
         // ── Ensure an EventSystem exists (needed for button clicks) ──
         if (UnityEngine.EventSystems.EventSystem.current == null)
         {

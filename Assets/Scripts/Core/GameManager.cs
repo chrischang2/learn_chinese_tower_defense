@@ -10,7 +10,7 @@ public class GameManager : MonoBehaviour
 {
     public static GameManager Instance { get; private set; }
 
-    public enum State { MainMenu, Playing, WaveIntro, GameOver }
+    public enum State { MainMenu, Playing, WaveIntro, GameOver, RoleplayScenarios }
 
     public State GameState { get; private set; } = State.MainMenu;
     public int Score { get; private set; }
@@ -25,6 +25,12 @@ public class GameManager : MonoBehaviour
 
     /// <summary>True when a boss wave is active.</summary>
     public bool IsBossWave { get; private set; }
+
+    /// <summary>True when playing a roleplay word drill (not normal wave progression).</summary>
+    public bool IsRoleplayDrill { get; private set; }
+
+    /// <summary>The active roleplay scenario for word drill mode.</summary>
+    public RoleplayScenario ActiveRoleplayScenario { get; private set; }
 
     // ── Persistence ──────────────────────────────────────────────────
 
@@ -99,6 +105,12 @@ public class GameManager : MonoBehaviour
     public event System.Action<int, int> OnWaveProgress;
     /// <summary>Fired when starting a boss wave from the menu. Args: boss wave number.</summary>
     public event System.Action<int> OnBossStart;
+
+    /// <summary>Fired when entering the roleplay scenarios screen.</summary>
+    public event System.Action OnRoleplayScreenOpen;
+
+    /// <summary>Fired when starting a roleplay word drill.</summary>
+    public event System.Action<RoleplayScenario> OnRoleplayDrillStart;
 
     void Awake()
     {
@@ -255,6 +267,54 @@ public class GameManager : MonoBehaviour
     public void ReturnToMenu()
     {
         SceneManager.LoadScene(SceneManager.GetActiveScene().buildIndex);
+    }
+
+    /// <summary>Return to the main menu without reloading the scene.</summary>
+    public void ReturnToMainMenu()
+    {
+        IsRoleplayDrill = false;
+        ActiveRoleplayScenario = null;
+        GameState = State.MainMenu;
+        OnMainMenu?.Invoke();
+    }
+
+    /// <summary>Open the roleplay scenarios screen.</summary>
+    public void OpenRoleplayScenarios()
+    {
+        GameState = State.RoleplayScenarios;
+        OnRoleplayScreenOpen?.Invoke();
+    }
+
+    /// <summary>Start a roleplay word drill with the given scenario's word list.</summary>
+    public void StartRoleplayDrill(RoleplayScenario scenario)
+    {
+        ActiveRoleplayScenario = scenario;
+        IsRoleplayDrill = true;
+        Wave = 1;
+        Score = 0;
+        Lives = 3;
+        IsBossWave = false;
+        GameState = State.WaveIntro;
+        OnScoreChanged?.Invoke();
+        OnLivesChanged?.Invoke();
+        OnWaveChanged?.Invoke();
+        OnRoleplayDrillStart?.Invoke(scenario);
+    }
+
+    /// <summary>Called when a roleplay drill is completed.</summary>
+    public void RoleplayDrillComplete()
+    {
+        IsRoleplayDrill = false;
+        if (ActiveRoleplayScenario != null)
+        {
+            if (RoleplayManager.Instance != null)
+                RoleplayManager.Instance.MarkWordsLearned(ActiveRoleplayScenario);
+            if (LearnedWordsManager.Instance != null)
+                LearnedWordsManager.Instance.AddWordsFromScenario(ActiveRoleplayScenario);
+        }
+        ActiveRoleplayScenario = null;
+        BankScore();
+        ReturnToMainMenu();
     }
 
     public void RestartGame()
