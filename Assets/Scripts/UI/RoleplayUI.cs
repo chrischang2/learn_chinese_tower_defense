@@ -20,8 +20,6 @@ public class RoleplayUI : MonoBehaviour
 
     // ── State ────────────────────────────────────────────────────────
     private RoleplayScenario selectedScenario;
-    private int currentPage = 0;
-    private const int ScenariosPerPage = 6;
 
     private Transform EnsureCanvas()
     {
@@ -43,7 +41,6 @@ public class RoleplayUI : MonoBehaviour
     {
         EnsureCanvas();
         CloseAll();
-        currentPage = 0;
         BuildListPanel();
     }
 
@@ -148,40 +145,64 @@ public class RoleplayUI : MonoBehaviour
             }
         }
 
-        // ── Scenario cards ───────────────────────────────────────────
+        // ── Scrollable scenario list ─────────────────────────────────
         List<RoleplayScenario> scenarios = RoleplayManager.Instance != null
             ? RoleplayManager.Instance.Scenarios
             : new List<RoleplayScenario>();
-
-        int totalPages = Mathf.Max(1, Mathf.CeilToInt((float)scenarios.Count / ScenariosPerPage));
-        currentPage = Mathf.Clamp(currentPage, 0, totalPages - 1);
-
-        int startIdx = currentPage * ScenariosPerPage;
-        int endIdx = Mathf.Min(startIdx + ScenariosPerPage, scenarios.Count);
-
-        float cardStartY = 140f;
-        float cardHeight = 70f;
-        float cardGap = 10f;
 
         Font cjkFont = Font.CreateDynamicFontFromOSFont("Microsoft YaHei", 48);
         if (cjkFont == null)
             cjkFont = Font.CreateDynamicFontFromOSFont("SimHei", 48);
 
-        for (int i = startIdx; i < endIdx; i++)
+        // Scroll view container (between generate button and back button)
+        GameObject scrollGO = new GameObject("ScenarioScroll");
+        scrollGO.transform.SetParent(listPanel.transform, false);
+        RectTransform scrollObjRect = scrollGO.AddComponent<RectTransform>();
+        scrollObjRect.anchorMin = new Vector2(0.5f, 0.5f);
+        scrollObjRect.anchorMax = new Vector2(0.5f, 0.5f);
+        scrollObjRect.pivot = new Vector2(0.5f, 0.5f);
+        scrollObjRect.anchoredPosition = new Vector2(0, -80f);
+        scrollObjRect.sizeDelta = new Vector2(720, 340);
+
+        Image scrollBg = scrollGO.AddComponent<Image>();
+        scrollBg.color = new Color(0.04f, 0.04f, 0.07f, 0.8f);
+        scrollGO.AddComponent<Mask>().showMaskGraphic = true;
+
+        ScrollRect scrollView = scrollGO.AddComponent<ScrollRect>();
+        scrollView.horizontal = false;
+        scrollView.movementType = ScrollRect.MovementType.Clamped;
+        scrollView.scrollSensitivity = 30f;
+
+        // Content container inside scroll
+        GameObject contentGO = new GameObject("Content");
+        contentGO.transform.SetParent(scrollGO.transform, false);
+        RectTransform contentRect = contentGO.AddComponent<RectTransform>();
+        contentRect.anchorMin = new Vector2(0, 1);
+        contentRect.anchorMax = new Vector2(1, 1);
+        contentRect.pivot = new Vector2(0.5f, 1);
+        contentRect.anchoredPosition = Vector2.zero;
+
+        float cardHeight = 70f;
+        float cardGap = 8f;
+        float totalHeight = scenarios.Count * (cardHeight + cardGap) + 10f;
+        contentRect.sizeDelta = new Vector2(0, Mathf.Max(totalHeight, 10f));
+
+        scrollView.content = contentRect;
+
+        for (int i = 0; i < scenarios.Count; i++)
         {
-            int cardIdx = i - startIdx;
-            float y = cardStartY - cardIdx * (cardHeight + cardGap);
+            float y = -5f - i * (cardHeight + cardGap);
             RoleplayScenario sc = scenarios[i];
 
             // Card background
             GameObject card = new GameObject("ScenarioCard_" + i);
-            card.transform.SetParent(listPanel.transform, false);
+            card.transform.SetParent(contentGO.transform, false);
             RectTransform cardRect = card.AddComponent<RectTransform>();
-            cardRect.anchorMin = new Vector2(0.5f, 0.5f);
-            cardRect.anchorMax = new Vector2(0.5f, 0.5f);
-            cardRect.pivot = new Vector2(0.5f, 0.5f);
+            cardRect.anchorMin = new Vector2(0, 1);
+            cardRect.anchorMax = new Vector2(1, 1);
+            cardRect.pivot = new Vector2(0.5f, 1);
             cardRect.anchoredPosition = new Vector2(0, y);
-            cardRect.sizeDelta = new Vector2(700, cardHeight);
+            cardRect.sizeDelta = new Vector2(-20, cardHeight);
 
             Image cardBg = card.AddComponent<Image>();
             cardBg.color = sc.wordsLearned
@@ -226,34 +247,13 @@ public class RoleplayUI : MonoBehaviour
 
         if (scenarios.Count == 0)
         {
-            Text empty = CreatePanelText(listPanel.transform,
-                "No scenarios yet.\nGenerate one to get started!", 24, new Vector2(0, 50));
+            Text empty = CreatePanelText(scrollGO.transform,
+                "No scenarios yet.\nGenerate one to get started!", 24, new Vector2(0, 0));
             empty.color = new Color(0.5f, 0.5f, 0.5f);
         }
 
-        // ── Pagination ───────────────────────────────────────────────
-        float navY = -280f;
-        if (currentPage > 0)
-        {
-            CreateMenuButton(listPanel.transform, "< PREV",
-                new Vector2(-160, navY), () =>
-                {
-                    currentPage--;
-                    BuildListPanel();
-                }, 180, 50);
-        }
-        if (currentPage < totalPages - 1)
-        {
-            CreateMenuButton(listPanel.transform, "NEXT >",
-                new Vector2(160, navY), () =>
-                {
-                    currentPage++;
-                    BuildListPanel();
-                }, 180, 50);
-        }
-
-        // Back button
-        CreateMenuButton(listPanel.transform, "BACK TO MENU", new Vector2(0, -350), () =>
+        // Back button (below the scroll area)
+        CreateMenuButton(listPanel.transform, "BACK TO MENU", new Vector2(0, -290), () =>
         {
             CloseAll();
             // Tell HUDManager to show main menu

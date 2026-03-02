@@ -231,10 +231,7 @@ public class ChatUI : MonoBehaviour
         scrollObjRect.offsetMin = new Vector2(0, 70);   // above bottom bar
         scrollObjRect.offsetMax = new Vector2(0, -70);   // below top bar
 
-        Image scrollBg = scrollObj.AddComponent<Image>();
-        scrollBg.color = new Color(0.05f, 0.05f, 0.08f, 0f); // transparent
-        scrollObj.AddComponent<Mask>().showMaskGraphic = false;
-
+        // No Image/Mask here — the Viewport child handles clipping
         scrollRect = scrollObj.AddComponent<ScrollRect>();
         scrollRect.horizontal = false;
         scrollRect.movementType = ScrollRect.MovementType.Clamped;

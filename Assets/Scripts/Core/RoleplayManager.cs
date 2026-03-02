@@ -469,7 +469,8 @@ Rules:
   ""messages"": [{msgs}],
   ""max_tokens"": 256,
   ""temperature"": 0.8,
-  ""stream"": false
+  ""stream"": false,
+  ""stop"": [""<|im_end|>"", ""<|im_start|>""]
 }}";
 
         using (var req = new UnityEngine.Networking.UnityWebRequest(url, "POST"))
@@ -509,7 +510,8 @@ Rules:
   ],
   ""max_tokens"": {maxTokens},
   ""temperature"": 0.7,
-  ""stream"": false
+  ""stream"": false,
+  ""stop"": [""<|im_end|>"", ""<|im_start|>""]
 }}";
     }
 
@@ -562,6 +564,23 @@ Rules:
             idx++;
         }
 
-        return sb.ToString();
+        return CleanChatResponse(sb.ToString());
+    }
+
+    /// <summary>Strip chatml tokens and fake continuation turns from LLM output.</summary>
+    private string CleanChatResponse(string raw)
+    {
+        if (string.IsNullOrEmpty(raw)) return raw;
+
+        // Truncate at the first chatml token — the model sometimes generates these
+        string[] stopTokens = { "<|im_end|>", "<|im_start|>", "<|endoftext|>" };
+        foreach (string token in stopTokens)
+        {
+            int idx = raw.IndexOf(token);
+            if (idx >= 0)
+                raw = raw.Substring(0, idx);
+        }
+
+        return raw.Trim();
     }
 }
